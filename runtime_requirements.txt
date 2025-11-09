@@ -1,0 +1,14 @@
+# Additional runtime dependencies for VMamba backbones.
+# These are installed into the dedicated mamba-mllm-vmamba environment
+# to avoid polluting the main mamba-mllm environment.
+triton>=2.1
+pytest
+chardet
+yacs
+termcolor
+fvcore
+seaborn
+packaging
+ninja
+einops
+tabulate
