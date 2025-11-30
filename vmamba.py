@@ -784,40 +784,16 @@ import warnings
 WITH_SELECTIVESCAN_MAMBA = True
 try:
     import selective_scan_cuda
-except ImportError:
-    WITH_SELECTIVESCAN_MAMBA = False
+except ImportError as exc:
+    raise RuntimeError(
+        "selective_scan_cuda not found; rebuild the VMamba selective-scan kernel in the active environment."
+    ) from exc
 
 
-def selective_scan_torch(
-    u: torch.Tensor, # (B, K * C, L)
-    delta: torch.Tensor, # (B, K * C, L)
-    A: torch.Tensor, # (K * C, N)
-    B: torch.Tensor, # (B, K, N, L)
-    C: torch.Tensor, # (B, K, N, L)
-    D: torch.Tensor = None, # (K * C)
-    delta_bias: torch.Tensor = None, # (K * C)
-    delta_softplus=True, 
-    oflex=True, 
-    *args,
-    **kwargs
-):
-    dtype_in = u.dtype
-    Batch, K, N, L = B.shape
-    KCdim = u.shape[1]
-    Cdim = int(KCdim / K)
-    assert u.shape == (Batch, KCdim, L)
-    assert delta.shape == (Batch, KCdim, L)
-    assert A.shape == (KCdim, N)
-    assert C.shape == B.shape
-
-    if delta_bias is not None:
-        delta = delta + delta_bias[..., None]
-    if delta_softplus:
-        delta = torch.nn.functional.softplus(delta)
-            
-    u, delta, A, B, C = u.float(), delta.float(), A.float(), B.float(), C.float()
-    B = B.view(Batch, K, 1, N, L).repeat(1, 1, Cdim, 1, 1).view(Batch, KCdim, N, L)
-    C = C.view(Batch, K, 1, N, L).repeat(1, 1, Cdim, 1, 1).view(Batch, KCdim, N, L)
+def selective_scan_torch(*_args, **_kwargs):
+    raise RuntimeError(
+        "Torch fallback for selective_scan is disabled. The selective_scan_cuda extension must be available."
+    )
     deltaA = torch.exp(torch.einsum('bdl,dn->bdln', delta, A))
     deltaB_u = torch.einsum('bdl,bdnl,bdl->bdln', delta, B, u)
     
@@ -881,8 +857,7 @@ def selective_scan_fn(
     oflex=True,
     backend=None,
 ):
-    fn = selective_scan_torch if backend == "torch" or (not WITH_SELECTIVESCAN_MAMBA) else SelectiveScanCuda.apply
-    return fn(u, delta, A, B, C, D, delta_bias, delta_softplus, oflex, backend)
+    return SelectiveScanCuda.apply(u, delta, A, B, C, D, delta_bias, delta_softplus, oflex, backend)
 
 
 # fvcore flops =======================================
@@ -2478,6 +2453,5 @@ if __name__ == "__main__":
     # do_throughput("vmamba_small_s1l20")
     # do_throughput("vmamba_base_s1l20")
     
-
 
 
