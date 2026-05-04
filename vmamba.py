@@ -1031,6 +1031,24 @@ class Linear(nn.Linear):
         nn.Linear.__init__(self, *args, **kwargs)
         self.channel_first = channel_first
         self.groups = groups
+
+    def _grouped_linear_1d_fallback(self, x: torch.Tensor) -> torch.Tensor:
+        bsz, channels, length = x.shape
+        groups = self.groups
+        if channels % groups != 0 or self.weight.shape[0] % groups != 0:
+            raise RuntimeError(
+                f"Grouped Linear fallback requires divisible shapes, got channels={channels}, "
+                f"out_features={self.weight.shape[0]}, groups={groups}"
+            )
+
+        in_per_group = channels // groups
+        out_per_group = self.weight.shape[0] // groups
+        x_grouped = x.view(bsz, groups, in_per_group, length).permute(0, 1, 3, 2)
+        weight_grouped = self.weight.view(groups, out_per_group, in_per_group)
+        y = torch.einsum("bgli,goi->bglo", x_grouped, weight_grouped)
+        if self.bias is not None:
+            y = y + self.bias.view(1, groups, 1, out_per_group)
+        return y.permute(0, 1, 3, 2).reshape(bsz, self.weight.shape[0], length)
     
     def forward(self, x: torch.Tensor):
         if self.channel_first:
@@ -1038,7 +1056,19 @@ class Linear(nn.Linear):
             if len(x.shape) == 4:
                 return F.conv2d(x, self.weight[:, :, None, None], self.bias, groups=self.groups)
             elif len(x.shape) == 3:
-                return F.conv1d(x, self.weight[:, :, None], self.bias, groups=self.groups)
+                if os.environ.get("VMAMBA_DISABLE_CUDNN_LINEAR_1D", "").strip().lower() in {"1", "true", "yes"}:
+                    return self._grouped_linear_1d_fallback(x)
+                try:
+                    return F.conv1d(x, self.weight[:, :, None], self.bias, groups=self.groups)
+                except RuntimeError as exc:
+                    message = str(exc)
+                    if "unable to find an engine" not in message.lower():
+                        raise
+                    try:
+                        with torch.backends.cudnn.flags(enabled=False):
+                            return F.conv1d(x, self.weight[:, :, None], self.bias, groups=self.groups)
+                    except RuntimeError:
+                        return self._grouped_linear_1d_fallback(x)
         else:
             return F.linear(x, self.weight, self.bias)
 
@@ -2453,5 +2483,3 @@ if __name__ == "__main__":
     # do_throughput("vmamba_small_s1l20")
     # do_throughput("vmamba_base_s1l20")
     
-
-
