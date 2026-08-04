@@ -1604,6 +1604,18 @@ class SS2Dv2:
             if x.numel() >= 2 ** 31 and x.shape[0] > 1:
                 # cuDNN/ATen 2^31 element wall -- chunk over batch (identical numerics)
                 x = torch.cat([self.conv2d(xb) for xb in x.split(1, dim=0)], dim=0)
+            elif x.numel() >= 2 ** 31:
+                # bs=1 past the wall (>=16384px): depthwise conv has independent channels --
+                # chunk the module's weight along channels, numerics identical (profiling3 E11)
+                cw = self.conv2d
+                half = x.shape[1] // 2
+                import torch.nn.functional as _F
+                x = torch.cat([
+                    _F.conv2d(x[:, :half], cw.weight[:half], None if cw.bias is None else cw.bias[:half],
+                              stride=cw.stride, padding=cw.padding, groups=half),
+                    _F.conv2d(x[:, half:], cw.weight[half:], None if cw.bias is None else cw.bias[half:],
+                              stride=cw.stride, padding=cw.padding, groups=x.shape[1] - half),
+                ], dim=1)
             else:
                 x = self.conv2d(x) # (b, d, h, w)
         x = self.act(x)
