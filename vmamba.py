@@ -1054,6 +1054,18 @@ class Linear(nn.Linear):
         if self.channel_first:
             # B, C, H, W = x.shape
             if len(x.shape) == 4:
+                out_numel = x.shape[0] * self.weight.shape[0] * x.shape[2] * x.shape[3]
+                if self.groups == 1 and max(x.numel(), out_numel) >= 2 ** 31:
+                    # cuDNN/ATen int32 walls apply to outputs too (profiling3 E9: the 1x1
+                    # in_proj output at 8192px/bs1 is exactly 2^31 elements). Output channels
+                    # of a 1x1 conv are independent -- chunk the weight, numerics unchanged.
+                    half = self.weight.shape[0] // 2
+                    return torch.cat([
+                        F.conv2d(x, self.weight[:half, :, None, None],
+                                 None if self.bias is None else self.bias[:half]),
+                        F.conv2d(x, self.weight[half:, :, None, None],
+                                 None if self.bias is None else self.bias[half:]),
+                    ], dim=1)
                 return F.conv2d(x, self.weight[:, :, None, None], self.bias, groups=self.groups)
             elif len(x.shape) == 3:
                 if os.environ.get("VMAMBA_DISABLE_CUDNN_LINEAR_1D", "").strip().lower() in {"1", "true", "yes"}:
