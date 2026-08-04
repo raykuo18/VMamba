@@ -409,7 +409,7 @@ def triton_cross_scan_flex(
 
     _tmp1 = DC * DH * DW
 
-    y_ptr_base = y + i_b * 4 * _tmp1 + (i_c * BC * DH * DW if y_layout == 0 else i_c * BC)
+    y_ptr_base = y + i_b.to(tl.int64) * 4 * _tmp1 + (i_c.to(tl.int64) * BC * DH * DW if y_layout == 0 else i_c * BC)
     if y_layout == 0:
         p_y1 = y_ptr_base + HWRoute0
         p_y2 = y_ptr_base + _tmp1 + HWRoute1
@@ -422,7 +422,7 @@ def triton_cross_scan_flex(
         p_y4 = y_ptr_base + 3 * DC + HWRoute3 * 4 * DC       
     
     if onebyone == 0:
-        x_ptr_base = x + i_b * _tmp1 + (i_c * BC * DH * DW if x_layout == 0 else i_c * BC)
+        x_ptr_base = x + i_b.to(tl.int64) * _tmp1 + (i_c.to(tl.int64) * BC * DH * DW if x_layout == 0 else i_c * BC)
         if x_layout == 0:
             p_x = x_ptr_base + HWRoute0
         else:
@@ -448,7 +448,7 @@ def triton_cross_scan_flex(
                 tl.store(p_x + _idx_x, _y1 + _y2 + _y3 + _y4, mask=_mask_hw)
 
     else:
-        x_ptr_base = x + i_b * 4 * _tmp1 + (i_c * BC * DH * DW if x_layout == 0 else i_c * BC)
+        x_ptr_base = x + i_b.to(tl.int64) * 4 * _tmp1 + (i_c.to(tl.int64) * BC * DH * DW if x_layout == 0 else i_c * BC)
         if x_layout == 0:
             p_x1 = x_ptr_base + HWRoute0
             p_x2 = p_x1 + _tmp1
@@ -1058,6 +1058,11 @@ class Linear(nn.Linear):
             elif len(x.shape) == 3:
                 if os.environ.get("VMAMBA_DISABLE_CUDNN_LINEAR_1D", "").strip().lower() in {"1", "true", "yes"}:
                     return self._grouped_linear_1d_fallback(x)
+                if x.numel() >= 2 ** 31:
+                    # cuDNN refuses >=2^31-element conv1d inputs ("unable to find an engine")
+                    # and the ATen retry raises an illegal memory access at 2^32 -- go straight
+                    # to the grouped-linear fallback instead of tripping either wall.
+                    return self._grouped_linear_1d_fallback(x)
                 try:
                     return F.conv1d(x, self.weight[:, :, None], self.bias, groups=self.groups)
                 except RuntimeError as exc:
@@ -1584,7 +1589,11 @@ class SS2Dv2:
         if not self.channel_first:
             x = x.permute(0, 3, 1, 2).contiguous()
         if self.with_dconv:
-            x = self.conv2d(x) # (b, d, h, w)
+            if x.numel() >= 2 ** 31 and x.shape[0] > 1:
+                # cuDNN/ATen 2^31 element wall -- chunk over batch (identical numerics)
+                x = torch.cat([self.conv2d(xb) for xb in x.split(1, dim=0)], dim=0)
+            else:
+                x = self.conv2d(x) # (b, d, h, w)
         x = self.act(x)
         y = self.forward_core(x)
         y = self.out_act(y)
