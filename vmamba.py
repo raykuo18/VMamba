@@ -408,13 +408,17 @@ def triton_cross_scan_flex(
         HWRoute3 = pos_w * DH + neg_h
 
     _tmp1 = DC * DH * DW
+    _t64 = tl.full((), DC * DH * DW, tl.int64)   # direction stride as explicit int64:
+    # k*_tmp1 for k in {1,2,3} crosses 2^31 from ~8192px (d_inner 192+) and wraps when the
+    # constexpr uint32 meets the int32 HWRoute tensors (profiling3 E16; the S/B@8192 and
+    # T@12288 fault family). All direction offsets below use _t64.
 
     y_ptr_base = y + i_b.to(tl.int64) * 4 * _tmp1 + (i_c.to(tl.int64) * BC * DH * DW if y_layout == 0 else i_c * BC)
     if y_layout == 0:
         p_y1 = y_ptr_base + HWRoute0
-        p_y2 = y_ptr_base + _tmp1 + HWRoute1
-        p_y3 = y_ptr_base + 2 * _tmp1 + HWRoute2
-        p_y4 = y_ptr_base + 3 * _tmp1 + HWRoute3
+        p_y2 = y_ptr_base + 1 * _t64 + HWRoute1
+        p_y3 = y_ptr_base + 2 * _t64 + HWRoute2
+        p_y4 = y_ptr_base + 3 * _t64 + HWRoute3
     else:
         p_y1 = y_ptr_base + HWRoute0 * 4 * DC
         p_y2 = y_ptr_base + DC + HWRoute1 * 4 * DC
@@ -451,9 +455,9 @@ def triton_cross_scan_flex(
         x_ptr_base = x + i_b.to(tl.int64) * 4 * _tmp1 + (i_c.to(tl.int64) * BC * DH * DW if x_layout == 0 else i_c * BC)
         if x_layout == 0:
             p_x1 = x_ptr_base + HWRoute0
-            p_x2 = p_x1 + _tmp1
-            p_x3 = p_x2 + _tmp1
-            p_x4 = p_x3 + _tmp1  
+            p_x2 = p_x1 + _t64
+            p_x3 = p_x2 + _t64
+            p_x4 = p_x3 + _t64  
         else:
             p_x1 = x_ptr_base + HWRoute0 * 4 * DC
             p_x2 = p_x1 + DC
